@@ -25,7 +25,7 @@ BORDER = "#1F2A3A"
 TEXT = "#F8FAFC"
 MUTED = "#AAB4C3"
 FIELD_BG = "#30363A"
-APP_VERSION = "1.1"
+APP_VERSION = "1.2"
 
 
 @dataclass(frozen=True)
