@@ -4,16 +4,15 @@ import queue
 import re
 import threading
 import tkinter as tk
-import webbrowser
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
 from average_headcount import Segment, build_segments, parse_ru_date, read_records, write_xlsx
-from updater import UpdateInfo, check_latest_release
+from updater import UpdateInfo, check_latest_release, download_update, launch_update_installer
 
 
 NAVY = "#111827"
@@ -25,7 +24,7 @@ BORDER = "#1F2A3A"
 TEXT = "#F8FAFC"
 MUTED = "#AAB4C3"
 FIELD_BG = "#30363A"
-APP_VERSION = "1.2"
+APP_VERSION = "1.1"
 
 
 @dataclass(frozen=True)
@@ -55,6 +54,7 @@ class HeadcountApp(ctk.CTk):
         self.worker_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.update_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.is_running = False
+        self.is_updating = False
         self.update_info: UpdateInfo | None = None
 
         self.folder_var = ctk.StringVar(value="")
@@ -248,16 +248,20 @@ class HeadcountApp(ctk.CTk):
             font=ctk.CTkFont(size=13, weight="bold"),
         )
         self.update_label.grid(row=0, column=0, sticky="ew", padx=16, pady=12)
-        ctk.CTkButton(
+        self.update_button = ctk.CTkButton(
             self.update_panel,
-            text="Скачать",
+            text="Обновить",
             width=110,
             height=32,
             corner_radius=6,
             fg_color="#16A34A",
             hover_color="#15803D",
-            command=self._open_update,
-        ).grid(row=0, column=1, sticky="e", padx=(8, 16), pady=10)
+            command=self._start_update_install,
+        )
+        self.update_button.grid(row=0, column=1, sticky="e", padx=(8, 16), pady=10)
+        self.update_progress = ctk.CTkProgressBar(self.update_panel, height=6, corner_radius=4)
+        self.update_progress.grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 12))
+        self.update_progress.set(0)
 
     def _build_parameter_panel(self) -> None:
         panel = ctk.CTkFrame(self.content, fg_color=PANEL_BG, corner_radius=12, border_width=1, border_color=BORDER)
@@ -467,18 +471,67 @@ class HeadcountApp(ctk.CTk):
             return
         if kind == "update":
             self._show_update(payload)
+        elif kind == "download_progress":
+            received, total = payload
+            if hasattr(self, "update_progress") and total:
+                self.update_progress.set(min(1, received / total))
+            if hasattr(self, "update_label") and total:
+                percent = int(received / total * 100)
+                self.update_label.configure(text=f"Скачивание обновления... {percent}%")
+            self.after(100, self._poll_update)
+            return
+        elif kind == "downloaded":
+            self._install_downloaded_update(payload)
+        elif kind == "update_error":
+            self.is_updating = False
+            if hasattr(self, "update_button"):
+                self.update_button.configure(state="normal", text="Обновить")
+            if hasattr(self, "update_label"):
+                self.update_label.configure(text=f"Не удалось установить обновление: {payload}")
+        self.after(250, self._poll_update)
 
     def _show_update(self, update: UpdateInfo) -> None:
         self.update_info = update
         if not hasattr(self, "update_panel"):
             return
         self.update_label.configure(text=f"Доступно обновление v{update.version}")
+        self.update_button.configure(state="normal", text="Обновить")
+        self.update_progress.set(0)
         self.update_panel.grid()
 
-    def _open_update(self) -> None:
-        if not self.update_info:
+    def _start_update_install(self) -> None:
+        if not self.update_info or self.is_updating:
             return
-        webbrowser.open(self.update_info.asset_url or self.update_info.page_url)
+        self.is_updating = True
+        self.update_button.configure(state="disabled", text="Загрузка...")
+        self.update_label.configure(text=f"Скачивание обновления v{self.update_info.version}...")
+        worker = threading.Thread(target=self._download_update_in_worker, daemon=True)
+        worker.start()
+
+    def _download_update_in_worker(self) -> None:
+        assert self.update_info is not None
+
+        def progress(received: int, total: int) -> None:
+            self.update_queue.put(("download_progress", (received, total)))
+
+        try:
+            zip_path = download_update(self.update_info, progress)
+            self.update_queue.put(("downloaded", zip_path))
+        except Exception as exc:
+            self.update_queue.put(("update_error", str(exc)))
+
+    def _install_downloaded_update(self, zip_path: Path) -> None:
+        self.update_label.configure(text="Подготовка установки обновления...")
+        self.update_button.configure(text="Установка...")
+        self.update_progress.set(1)
+        try:
+            launch_update_installer(zip_path)
+        except Exception as exc:
+            self.is_updating = False
+            self.update_button.configure(state="normal", text="Обновить")
+            messagebox.showerror("CorrectionsIQ", str(exc))
+            return
+        self.after(350, self.destroy)
 
     def _choose_folder(self) -> None:
         folder = filedialog.askdirectory(initialdir=self.folder_var.get().strip() or str(self.project_dir))
