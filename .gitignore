@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv*/
+.idea/
+build/
+dist/
+*.spec
+*.xlsx
+*.xls
+*.csv
+*.tmp
+~$*.docx
+сводка 2024/
+сводка 2025/
+сводка 2026/
+README.md
+SPEC.md
