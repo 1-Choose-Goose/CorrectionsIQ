@@ -4,6 +4,7 @@ import queue
 import re
 import threading
 import tkinter as tk
+import webbrowser
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from tkinter import filedialog
 import customtkinter as ctk
 
 from average_headcount import Segment, build_segments, parse_ru_date, read_records, write_xlsx
+from updater import UpdateInfo, check_latest_release
 
 
 NAVY = "#111827"
@@ -51,7 +53,9 @@ class HeadcountApp(ctk.CTk):
 
         self.result: CalculationResult | None = None
         self.worker_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+        self.update_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.is_running = False
+        self.update_info: UpdateInfo | None = None
 
         self.folder_var = ctk.StringVar(value="")
         self.institution_var = ctk.StringVar(value="")
@@ -64,6 +68,7 @@ class HeadcountApp(ctk.CTk):
         self._build_layout()
         self.after(0, lambda: self._center_window(1240, 780))
         self.after(120, self._poll_worker)
+        self.after(800, self._start_update_check)
 
     def _center_window(self, width: int, height: int) -> None:
         self.update_idletasks()
@@ -101,7 +106,6 @@ class HeadcountApp(ctk.CTk):
         self.content = ctk.CTkFrame(self, corner_radius=0, fg_color=PAGE_BG)
         self.content.grid(row=0, column=1, sticky="nsew")
         self.content.grid_columnconfigure(0, weight=1)
-        self.content.grid_rowconfigure(4, weight=1)
         self._render_headcount_module()
 
     def _build_sidebar(self) -> None:
@@ -157,8 +161,10 @@ class HeadcountApp(ctk.CTk):
 
     def _render_headcount_module(self) -> None:
         self._clear_content()
-        self.content.grid_rowconfigure(4, weight=1)
+        for row_index in range(8):
+            self.content.grid_rowconfigure(row_index, weight=1 if row_index == 5 else 0)
         self._build_header("Среднесписочная")
+        self._build_update_panel()
         self._build_parameter_panel()
         self._build_actions()
         self._build_summary()
@@ -167,7 +173,8 @@ class HeadcountApp(ctk.CTk):
 
     def _render_about_module(self) -> None:
         self._clear_content()
-        self.content.grid_rowconfigure(4, weight=1)
+        for row_index in range(8):
+            self.content.grid_rowconfigure(row_index, weight=1 if row_index == 1 else 0)
         self._build_header("О программе")
 
         panel = ctk.CTkFrame(self.content, fg_color=PANEL_BG, corner_radius=12, border_width=1, border_color=BORDER)
@@ -221,9 +228,40 @@ class HeadcountApp(ctk.CTk):
             font=ctk.CTkFont(size=12, weight="bold"),
         ).grid(row=0, column=1, sticky="e", padx=(12, 0))
 
+    def _build_update_panel(self) -> None:
+        self.update_panel = ctk.CTkFrame(
+            self.content,
+            fg_color="#123C2B",
+            corner_radius=12,
+            border_width=1,
+            border_color="#1E6B48",
+        )
+        self.update_panel.grid(row=1, column=0, sticky="ew", padx=22, pady=(0, 12))
+        self.update_panel.grid_columnconfigure(0, weight=1)
+        self.update_panel.grid_remove()
+
+        self.update_label = ctk.CTkLabel(
+            self.update_panel,
+            text="",
+            anchor="w",
+            text_color="#D1FAE5",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        )
+        self.update_label.grid(row=0, column=0, sticky="ew", padx=16, pady=12)
+        ctk.CTkButton(
+            self.update_panel,
+            text="Скачать",
+            width=110,
+            height=32,
+            corner_radius=6,
+            fg_color="#16A34A",
+            hover_color="#15803D",
+            command=self._open_update,
+        ).grid(row=0, column=1, sticky="e", padx=(8, 16), pady=10)
+
     def _build_parameter_panel(self) -> None:
         panel = ctk.CTkFrame(self.content, fg_color=PANEL_BG, corner_radius=12, border_width=1, border_color=BORDER)
-        panel.grid(row=1, column=0, sticky="ew", padx=22, pady=(0, 12))
+        panel.grid(row=2, column=0, sticky="ew", padx=22, pady=(0, 12))
         panel.grid_columnconfigure(0, weight=2)
         panel.grid_columnconfigure(1, weight=2)
         panel.grid_columnconfigure(2, weight=1)
@@ -310,7 +348,7 @@ class HeadcountApp(ctk.CTk):
 
     def _build_actions(self) -> None:
         actions = ctk.CTkFrame(self.content, fg_color="transparent")
-        actions.grid(row=2, column=0, sticky="ew", padx=22)
+        actions.grid(row=3, column=0, sticky="ew", padx=22)
         actions.grid_columnconfigure(0, weight=1)
         self.calculate_button = ctk.CTkButton(
             actions,
@@ -340,7 +378,7 @@ class HeadcountApp(ctk.CTk):
 
     def _build_summary(self) -> None:
         self.summary_frame = ctk.CTkFrame(self.content, fg_color="transparent")
-        self.summary_frame.grid(row=3, column=0, sticky="ew", padx=22, pady=(10, 10))
+        self.summary_frame.grid(row=4, column=0, sticky="ew", padx=22, pady=(10, 10))
         self.summary_frame.grid_columnconfigure((0, 1, 2), weight=1, uniform="summary")
         self.avg_value = self._summary_card(0, "Среднесписочное", "—")
         self.days_value = self._summary_card(1, "Дней в периоде", "—")
@@ -369,7 +407,7 @@ class HeadcountApp(ctk.CTk):
 
     def _build_table(self) -> None:
         table_panel = ctk.CTkFrame(self.content, corner_radius=12, fg_color=PANEL_BG, border_width=1, border_color=BORDER)
-        table_panel.grid(row=4, column=0, sticky="nsew", padx=22, pady=(0, 18))
+        table_panel.grid(row=5, column=0, sticky="nsew", padx=22, pady=(0, 18))
         table_panel.grid_columnconfigure(0, weight=1)
         table_panel.grid_rowconfigure(1, weight=1)
 
@@ -396,7 +434,7 @@ class HeadcountApp(ctk.CTk):
         self.rows_frame.grid_columnconfigure((0, 1), weight=1, uniform="table")
 
         self.progress = ctk.CTkProgressBar(self.content, height=5, corner_radius=0)
-        self.progress.grid(row=5, column=0, sticky="ew", padx=22, pady=(0, 8))
+        self.progress.grid(row=6, column=0, sticky="ew", padx=22, pady=(0, 8))
         self.progress.set(0)
         self.status_label = ctk.CTkLabel(
             self.content,
@@ -406,7 +444,41 @@ class HeadcountApp(ctk.CTk):
             text_color=MUTED,
             font=ctk.CTkFont(size=12),
         )
-        self.status_label.grid(row=6, column=0, sticky="ew", padx=22, pady=(0, 14))
+        self.status_label.grid(row=7, column=0, sticky="ew", padx=22, pady=(0, 14))
+
+    def _start_update_check(self) -> None:
+        worker = threading.Thread(target=self._check_update_in_worker, daemon=True)
+        worker.start()
+        self.after(250, self._poll_update)
+
+    def _check_update_in_worker(self) -> None:
+        try:
+            update = check_latest_release(APP_VERSION)
+            if update:
+                self.update_queue.put(("update", update))
+        except Exception:
+            self.update_queue.put(("none", None))
+
+    def _poll_update(self) -> None:
+        try:
+            kind, payload = self.update_queue.get_nowait()
+        except queue.Empty:
+            self.after(250, self._poll_update)
+            return
+        if kind == "update":
+            self._show_update(payload)
+
+    def _show_update(self, update: UpdateInfo) -> None:
+        self.update_info = update
+        if not hasattr(self, "update_panel"):
+            return
+        self.update_label.configure(text=f"Доступно обновление v{update.version}")
+        self.update_panel.grid()
+
+    def _open_update(self) -> None:
+        if not self.update_info:
+            return
+        webbrowser.open(self.update_info.asset_url or self.update_info.page_url)
 
     def _choose_folder(self) -> None:
         folder = filedialog.askdirectory(initialdir=self.folder_var.get().strip() or str(self.project_dir))

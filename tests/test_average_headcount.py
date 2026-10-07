@@ -15,6 +15,7 @@ from average_headcount import (
     read_records,
     read_records_from_file,
 )
+from updater import is_newer_version, normalize_version
 
 
 def make_docx(path: Path, rows):
@@ -40,6 +41,12 @@ def make_month_docx(path: Path, day_rows):
 
 
 class AverageHeadcountTests(unittest.TestCase):
+    def test_update_version_comparison(self):
+        self.assertEqual(normalize_version("v1.2"), (1, 2))
+        self.assertTrue(is_newer_version("1.2", "1.1"))
+        self.assertFalse(is_newer_version("1.1", "1.1"))
+        self.assertFalse(is_newer_version("1.0.9", "1.1"))
+
     def test_parse_ru_date_accepts_common_input_forms(self):
         expected = date(2026, 1, 20)
         self.assertEqual(parse_ru_date("20.01.2026"), expected)
