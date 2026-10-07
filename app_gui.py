@@ -262,6 +262,7 @@ class HeadcountApp(ctk.CTk):
         self.update_progress = ctk.CTkProgressBar(self.update_panel, height=6, corner_radius=4)
         self.update_progress.grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 12))
         self.update_progress.set(0)
+        self.update_progress.grid_remove()
 
     def _build_parameter_panel(self) -> None:
         panel = ctk.CTkFrame(self.content, fg_color=PANEL_BG, corner_radius=12, border_width=1, border_color=BORDER)
@@ -497,6 +498,7 @@ class HeadcountApp(ctk.CTk):
         self.update_label.configure(text=f"Доступно обновление v{update.version}")
         self.update_button.configure(state="normal", text="Обновить")
         self.update_progress.set(0)
+        self.update_progress.grid_remove()
         self.update_panel.grid()
 
     def _start_update_install(self) -> None:
@@ -505,6 +507,8 @@ class HeadcountApp(ctk.CTk):
         self.is_updating = True
         self.update_button.configure(state="disabled", text="Загрузка...")
         self.update_label.configure(text=f"Скачивание обновления v{self.update_info.version}...")
+        self.update_progress.grid()
+        self.update_progress.set(0)
         worker = threading.Thread(target=self._download_update_in_worker, daemon=True)
         worker.start()
 
