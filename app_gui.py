@@ -23,6 +23,7 @@ BORDER = "#1F2A3A"
 TEXT = "#F8FAFC"
 MUTED = "#AAB4C3"
 FIELD_BG = "#30363A"
+APP_VERSION = "1.1"
 
 
 @dataclass(frozen=True)
@@ -175,7 +176,7 @@ class HeadcountApp(ctk.CTk):
 
         rows = (
             ("Название", "CorrectionsIQ"),
-            ("Версия", "1.0"),
+            ("Версия", APP_VERSION),
             ("Разработчик", "Куц Олег Олегович"),
             ("Автор идеи", "Казначеев Андрей Юрьевич"),
         )
@@ -211,7 +212,7 @@ class HeadcountApp(ctk.CTk):
         ).grid(row=0, column=0, sticky="ew")
         ctk.CTkLabel(
             header,
-            text="v1.0",
+            text=f"v{APP_VERSION}",
             text_color="#86EFAC",
             fg_color="#123C2B",
             corner_radius=10,
