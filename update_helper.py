@@ -60,7 +60,7 @@ class InstallerWindow:
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", lambda: None)
         self._set_icon()
-        self._center()
+        self._center(560, 220)
 
         frame = ctk.CTkFrame(
             self.root,
@@ -108,6 +108,28 @@ class InstallerWindow:
         )
         self.percent.pack(fill="x", padx=24, pady=(0, 18))
 
+        self.error_text = ctk.CTkTextbox(
+            frame,
+            fg_color=BG,
+            border_width=1,
+            border_color=BORDER,
+            corner_radius=8,
+            text_color=TEXT,
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            wrap="word",
+        )
+        self.close_button = ctk.CTkButton(
+            frame,
+            text="Закрыть",
+            width=120,
+            height=34,
+            corner_radius=8,
+            fg_color=BLUE,
+            hover_color="#236AA3",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            command=self.root.destroy,
+        )
+
     def _set_icon(self) -> None:
         icon_path = resource_path("assets/app_icon.ico")
         if not icon_path.is_file():
@@ -120,10 +142,8 @@ class InstallerWindow:
         apply_icon()
         self.root.after(200, apply_icon)
 
-    def _center(self) -> None:
+    def _center(self, width: int, height: int) -> None:
         self.root.update_idletasks()
-        width = 560
-        height = 220
         left = max(0, (self.root.winfo_screenwidth() - width) // 2)
         top = max(0, (self.root.winfo_screenheight() - height) // 2)
         self.root.geometry(f"{width}x{height}+{left}+{top}")
@@ -137,10 +157,18 @@ class InstallerWindow:
 
     def show_error(self, text: str) -> None:
         self.title.configure(text="Не удалось установить обновление", text_color=ERROR)
-        self.status.configure(text=text)
-        self.progress.configure(progress_color=ERROR)
-        self.progress.set(1)
-        self.percent.configure(text="Ошибка", text_color=ERROR)
+        self.status.pack_forget()
+        self.progress.pack_forget()
+        self.percent.pack_forget()
+        self.error_text.configure(state="normal")
+        self.error_text.delete("1.0", "end")
+        self.error_text.insert("1.0", text.strip() or "Неизвестная ошибка")
+        self.error_text.configure(state="disabled")
+        self.error_text.pack(fill="both", expand=True, padx=24, pady=(16, 12))
+        self.close_button.pack(anchor="e", padx=24, pady=(0, 20))
+        self.root.resizable(True, True)
+        self.root.minsize(560, 320)
+        self._center(640, 360)
         self.root.protocol("WM_DELETE_WINDOW", self.root.destroy)
         self.root.update()
 
