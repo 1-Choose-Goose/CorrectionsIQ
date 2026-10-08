@@ -271,6 +271,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    os.chdir(tempfile.gettempdir())
     args = parse_args()
     window = InstallerWindow()
     try:

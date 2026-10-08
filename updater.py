@@ -294,6 +294,7 @@ def launch_update_installer(zip_path: Path) -> None:
             "--pid",
             str(os.getpid()),
         ],
+        cwd=str(helper_to_run.parent),
         close_fds=True,
         creationflags=creationflags,
     )

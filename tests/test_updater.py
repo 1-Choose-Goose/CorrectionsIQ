@@ -15,7 +15,13 @@ from update_helper import (
     source_root,
     validate_install_paths,
 )
-from updater import UpdateInfo, UpdateState, validate_release_asset_url, verify_download
+from updater import (
+    UpdateInfo,
+    UpdateState,
+    launch_update_installer,
+    validate_release_asset_url,
+    verify_download,
+)
 
 
 class UpdateStateTests(unittest.TestCase):
@@ -81,6 +87,33 @@ class UpdateDownloadSafetyTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "контрольная сумма"):
                 verify_download(archive_path, update)
+
+
+class UpdateLaunchTests(unittest.TestCase):
+    def test_installer_uses_temporary_working_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app_dir = root / "CorrectionsIQ"
+            helper = app_dir / "_internal" / "CorrectionsIQUpdater.exe"
+            helper.parent.mkdir(parents=True)
+            helper.write_bytes(b"helper")
+            app = app_dir / "CorrectionsIQ.exe"
+            app.write_bytes(b"app")
+            archive = root / "CorrectionsIQ-v1.6.zip"
+            archive.write_bytes(b"archive")
+            temp_helper = root / "installer" / "CorrectionsIQUpdater.exe"
+            temp_helper.parent.mkdir()
+            temp_helper.write_bytes(b"helper")
+
+            with (
+                mock.patch("updater.application_dir", return_value=app_dir),
+                mock.patch("updater.application_exe", return_value=app),
+                mock.patch("updater._copy_helper_to_temp", return_value=temp_helper),
+                mock.patch("updater.subprocess.Popen") as popen,
+            ):
+                launch_update_installer(archive)
+
+            self.assertEqual(popen.call_args.kwargs["cwd"], str(temp_helper.parent))
 
 
 class UpdateArchiveSafetyTests(unittest.TestCase):
