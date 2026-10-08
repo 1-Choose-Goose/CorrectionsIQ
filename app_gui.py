@@ -4,16 +4,29 @@ import queue
 import re
 import threading
 import tkinter as tk
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
+from typing import Any
 
 import customtkinter as ctk
 
-from average_headcount import Segment, build_segments, parse_ru_date, read_records, write_xlsx
-from updater import UpdateInfo, check_latest_release, download_update, launch_update_installer
-
+from average_headcount import (
+    Segment,
+    build_segments,
+    parse_ru_date,
+    read_records,
+    write_xlsx,
+)
+from updater import (
+    UpdateInfo,
+    UpdateState,
+    check_latest_release,
+    download_update,
+    launch_update_installer,
+)
 
 NAVY = "#111827"
 NAVY_DARK = "#0F172A"
@@ -24,7 +37,7 @@ BORDER = "#1F2A3A"
 TEXT = "#F8FAFC"
 MUTED = "#AAB4C3"
 FIELD_BG = "#30363A"
-APP_VERSION = "1.1"
+APP_VERSION = "1.4"
 
 
 @dataclass(frozen=True)
@@ -54,8 +67,8 @@ class HeadcountApp(ctk.CTk):
         self.worker_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.update_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.is_running = False
-        self.is_updating = False
-        self.update_info: UpdateInfo | None = None
+        self.update_state = UpdateState()
+        self.calculation_error: str | None = None
 
         self.folder_var = ctk.StringVar(value="")
         self.institution_var = ctk.StringVar(value="")
@@ -80,15 +93,13 @@ class HeadcountApp(ctk.CTk):
         icon_path = self.project_dir / "assets" / "app_icon.ico"
         png_path = self.project_dir / "assets" / "app_icon.png"
         if icon_path.exists():
-            try:
+            with suppress(OSError, tk.TclError):
                 self.iconbitmap(str(icon_path))
-            except Exception:
-                pass
         if png_path.exists():
             try:
                 self._icon_image = tk.PhotoImage(file=str(png_path))
                 self.iconphoto(True, self._icon_image)
-            except Exception:
+            except (OSError, tk.TclError):
                 pass
 
     def _build_layout(self) -> None:
@@ -141,6 +152,8 @@ class HeadcountApp(ctk.CTk):
         self.nav_buttons[key] = button
 
     def _switch_module(self, key: str) -> None:
+        if key not in {"headcount", "about"}:
+            key = "headcount"
         self.active_module = key
         for name, button in self.nav_buttons.items():
             button.configure(
@@ -152,8 +165,6 @@ class HeadcountApp(ctk.CTk):
             self._render_headcount_module()
         elif key == "about":
             self._render_about_module()
-        else:
-            self._render_headcount_module()
 
     def _clear_content(self) -> None:
         for child in self.content.winfo_children():
@@ -169,7 +180,15 @@ class HeadcountApp(ctk.CTk):
         self._build_actions()
         self._build_summary()
         self._build_table()
-        self._show_empty_state()
+        if self.is_running:
+            self._show_empty_state("Расчет выполняется...")
+        elif self.result is not None:
+            self._show_result(self.result)
+        elif self.calculation_error:
+            self._render_error(self.calculation_error)
+        else:
+            self._show_empty_state()
+        self._sync_calculation_controls()
 
     def _render_about_module(self) -> None:
         self._clear_content()
@@ -263,6 +282,7 @@ class HeadcountApp(ctk.CTk):
         self.update_progress.grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 12))
         self.update_progress.set(0)
         self.update_progress.grid_remove()
+        self._sync_update_panel()
 
     def _build_parameter_panel(self) -> None:
         panel = ctk.CTkFrame(self.content, fg_color=PANEL_BG, corner_radius=12, border_width=1, border_color=BORDER)
@@ -471,68 +491,88 @@ class HeadcountApp(ctk.CTk):
             self.after(250, self._poll_update)
             return
         if kind == "update":
-            self._show_update(payload)
+            if isinstance(payload, UpdateInfo):
+                self._show_update(payload)
         elif kind == "download_progress":
-            received, total = payload
-            if hasattr(self, "update_progress") and total:
-                self.update_progress.set(min(1, received / total))
-            if hasattr(self, "update_label") and total:
-                percent = int(received / total * 100)
-                self.update_label.configure(text=f"Скачивание обновления... {percent}%")
+            if isinstance(payload, tuple) and len(payload) == 2:
+                received, total = payload
+                if isinstance(received, int) and isinstance(total, int):
+                    self.update_state.update_download(received, total)
+                    self._sync_update_panel()
             self.after(100, self._poll_update)
             return
         elif kind == "downloaded":
-            self._install_downloaded_update(payload)
+            if isinstance(payload, Path):
+                self._install_downloaded_update(payload)
         elif kind == "update_error":
-            self.is_updating = False
-            if hasattr(self, "update_button"):
-                self.update_button.configure(state="normal", text="Обновить")
-            if hasattr(self, "update_label"):
-                self.update_label.configure(text=f"Не удалось установить обновление: {payload}")
+            self.update_state.mark_error(str(payload))
+            self._sync_update_panel()
         self.after(250, self._poll_update)
 
     def _show_update(self, update: UpdateInfo) -> None:
-        self.update_info = update
-        if not hasattr(self, "update_panel"):
+        self.update_state.mark_available(update)
+        self._sync_update_panel()
+
+    @staticmethod
+    def _is_live_widget(widget: Any | None) -> bool:
+        if widget is None or not hasattr(widget, "winfo_exists"):
+            return False
+        try:
+            return bool(widget.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def _sync_update_panel(self) -> None:
+        panel: Any = getattr(self, "update_panel", None)
+        label: Any = getattr(self, "update_label", None)
+        button: Any = getattr(self, "update_button", None)
+        progress: Any = getattr(self, "update_progress", None)
+        if not all(self._is_live_widget(widget) for widget in (panel, label, button, progress)):
             return
-        self.update_label.configure(text=f"Доступно обновление v{update.version}")
-        self.update_button.configure(state="normal", text="Обновить")
-        self.update_progress.set(0)
-        self.update_progress.grid_remove()
-        self.update_panel.grid()
+
+        if self.update_state.phase == "idle":
+            panel.grid_remove()
+            return
+
+        label.configure(text=self.update_state.status_text)
+        button.configure(
+            text=self.update_state.button_text,
+            state="disabled" if self.update_state.busy else "normal",
+        )
+        progress.set(self.update_state.progress)
+        if self.update_state.progress_visible:
+            progress.grid()
+        else:
+            progress.grid_remove()
+        panel.grid()
 
     def _start_update_install(self) -> None:
-        if not self.update_info or self.is_updating:
+        update = self.update_state.info
+        if update is None or self.update_state.busy:
             return
-        self.is_updating = True
-        self.update_button.configure(state="disabled", text="Загрузка...")
-        self.update_label.configure(text=f"Скачивание обновления v{self.update_info.version}...")
-        self.update_progress.grid()
-        self.update_progress.set(0)
-        worker = threading.Thread(target=self._download_update_in_worker, daemon=True)
+        self.update_state.start_download()
+        self._sync_update_panel()
+        worker = threading.Thread(target=self._download_update_in_worker, args=(update,), daemon=True)
         worker.start()
 
-    def _download_update_in_worker(self) -> None:
-        assert self.update_info is not None
-
+    def _download_update_in_worker(self, update: UpdateInfo) -> None:
         def progress(received: int, total: int) -> None:
             self.update_queue.put(("download_progress", (received, total)))
 
         try:
-            zip_path = download_update(self.update_info, progress)
+            zip_path = download_update(update, progress)
             self.update_queue.put(("downloaded", zip_path))
         except Exception as exc:
             self.update_queue.put(("update_error", str(exc)))
 
     def _install_downloaded_update(self, zip_path: Path) -> None:
-        self.update_label.configure(text="Подготовка установки обновления...")
-        self.update_button.configure(text="Установка...")
-        self.update_progress.set(1)
+        self.update_state.mark_installing()
+        self._sync_update_panel()
         try:
             launch_update_installer(zip_path)
         except Exception as exc:
-            self.is_updating = False
-            self.update_button.configure(state="normal", text="Обновить")
+            self.update_state.mark_error(str(exc))
+            self._sync_update_panel()
             messagebox.showerror("CorrectionsIQ", str(exc))
             return
         self.after(350, self.destroy)
@@ -568,6 +608,8 @@ class HeadcountApp(ctk.CTk):
                 raise ValueError("Выберите папку со сводками.")
             if not folder.exists():
                 raise ValueError("Папка со сводками не найдена.")
+            if not folder.is_dir():
+                raise ValueError("Указанный путь не является папкой со сводками.")
             if not institution:
                 raise ValueError("Укажите учреждение.")
             if not self.start_var.get().strip():
@@ -583,6 +625,7 @@ class HeadcountApp(ctk.CTk):
             return
 
         self.is_running = True
+        self.calculation_error = None
         self.calculate_button.configure(state="disabled", text="Расчет...")
         self.export_button.configure(state="disabled")
         self.status_label.configure(text="Чтение Word-файлов и сбор дневных значений...")
@@ -628,19 +671,66 @@ class HeadcountApp(ctk.CTk):
             self.after(120, self._poll_worker)
             return
 
-        self.progress.stop()
-        self.progress.configure(mode="determinate")
-        self.progress.set(1)
         self.is_running = False
-        self.calculate_button.configure(state="normal", text="Рассчитать")
-        if kind == "success":
-            self._show_result(payload)
+        self._sync_calculation_controls()
+        if kind == "success" and isinstance(payload, CalculationResult):
+            self._accept_calculation_result(payload)
         else:
-            self._show_error(str(payload))
+            self._accept_calculation_error(str(payload))
         self.after(120, self._poll_worker)
+
+    def _sync_calculation_controls(self) -> None:
+        progress: Any = getattr(self, "progress", None)
+        calculate_button: Any = getattr(self, "calculate_button", None)
+        export_button: Any = getattr(self, "export_button", None)
+        status_label: Any = getattr(self, "status_label", None)
+        if not all(
+            self._is_live_widget(widget)
+            for widget in (progress, calculate_button, export_button, status_label)
+        ):
+            return
+
+        if self.is_running:
+            calculate_button.configure(state="disabled", text="Расчет...")
+            export_button.configure(state="disabled")
+            status_label.configure(text="Чтение Word-файлов и сбор дневных значений...")
+            progress.configure(mode="indeterminate")
+            progress.start()
+            return
+
+        progress.stop()
+        progress.configure(mode="determinate")
+        progress.set(1 if self.result is not None else 0)
+        calculate_button.configure(state="normal", text="Рассчитать")
+        export_button.configure(state="normal" if self.result is not None else "disabled")
+
+    def _accept_calculation_result(self, result: CalculationResult) -> None:
+        self.result = result
+        self.calculation_error = None
+        if self.active_module == "headcount":
+            self._show_result(result)
+
+    def _accept_calculation_error(self, message: str) -> None:
+        self.result = None
+        self.calculation_error = self._friendly_error_message(message)
+        if self.active_module == "headcount":
+            self._render_error(self.calculation_error)
 
     def _show_result(self, result: CalculationResult) -> None:
         self.result = result
+        self.calculation_error = None
+        if not all(
+            self._is_live_widget(widget)
+            for widget in (
+                getattr(self, "avg_value", None),
+                getattr(self, "days_value", None),
+                getattr(self, "weighted_value", None),
+                getattr(self, "status_label", None),
+                getattr(self, "export_button", None),
+                getattr(self, "rows_frame", None),
+            )
+        ):
+            return
         self.avg_value.configure(text=f"{result.average:.2f}")
         self.days_value.configure(text=str(result.total_days))
         self.weighted_value.configure(text=f"{result.total_weighted:,}".replace(",", " "))
@@ -660,17 +750,32 @@ class HeadcountApp(ctk.CTk):
                 ).grid(row=row_index, column=col_index, sticky="ew", padx=0, pady=0)
 
     def _show_error(self, message: str) -> None:
+        self._accept_calculation_error(message)
+
+    def _friendly_error_message(self, message: str) -> str:
         if "Не найдено ни одной подходящей сводки" in message:
             institution = self.institution_var.get().strip()
-            message = (
+            return (
                 f"Не найдено учреждение «{institution}» за выбранный период.\n\n"
                 "Проверьте название учреждения. Например: ИК-1, ИК-10, ИЦ-1, УИЦ-1, СИЗО-1, ЛПУ-3."
             )
-        self.result = None
-        if hasattr(self, "export_button"):
-            self.export_button.configure(state="disabled")
-        if hasattr(self, "status_label"):
-            self.status_label.configure(text=f"Ошибка: {message}")
+        return message
+
+    def _render_error(self, message: str) -> None:
+        if not all(
+            self._is_live_widget(widget)
+            for widget in (
+                getattr(self, "avg_value", None),
+                getattr(self, "days_value", None),
+                getattr(self, "weighted_value", None),
+                getattr(self, "status_label", None),
+                getattr(self, "export_button", None),
+                getattr(self, "rows_frame", None),
+            )
+        ):
+            return
+        self.export_button.configure(state="disabled")
+        self.status_label.configure(text=f"Ошибка: {message}")
         self.avg_value.configure(text="—")
         self.days_value.configure(text="—")
         self.weighted_value.configure(text="—")
@@ -685,11 +790,11 @@ class HeadcountApp(ctk.CTk):
             font=ctk.CTkFont(size=14, weight="bold"),
         ).grid(row=0, column=0, columnspan=2, sticky="ew", padx=16, pady=18)
 
-    def _show_empty_state(self) -> None:
+    def _show_empty_state(self, message: str = "Заполните параметры и нажмите «Рассчитать».") -> None:
         self._clear_rows()
         ctk.CTkLabel(
             self.rows_frame,
-            text="Заполните параметры и нажмите «Рассчитать».",
+            text=message,
             anchor="center",
             text_color=MUTED,
             font=ctk.CTkFont(size=15),
@@ -709,7 +814,12 @@ class HeadcountApp(ctk.CTk):
         )
         if not target:
             return
-        write_xlsx(Path(target), self.result.segments, self.result.average)
+        try:
+            write_xlsx(Path(target), self.result.segments, self.result.average)
+        except Exception as exc:
+            self.status_label.configure(text=f"Не удалось сохранить Excel: {exc}")
+            messagebox.showerror("CorrectionsIQ", f"Не удалось сохранить Excel-файл.\n\n{exc}")
+            return
         self.status_label.configure(text=f"Excel сохранен: {target}")
 
     def _default_excel_filename(self, result: CalculationResult) -> str:

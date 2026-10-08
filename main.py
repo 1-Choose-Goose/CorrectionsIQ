@@ -1,14 +1,13 @@
-import sys
 import platform
 import subprocess
+import sys
 import traceback
 from importlib.util import find_spec
 
-
 REQUIRED_PACKAGES = {
-    "docx": "python-docx>=1.1.2",
-    "customtkinter": "customtkinter>=5.2.2",
-    "openpyxl": "openpyxl>=3.1.5",
+    "docx": "python-docx==1.2.0",
+    "customtkinter": "customtkinter==6.0.0",
+    "openpyxl": "openpyxl==3.1.5",
 }
 
 
@@ -119,4 +118,4 @@ if __name__ == "__main__":
         raise SystemExit(run())
     except Exception as startup_error:
         show_startup_error(startup_error)
-        raise SystemExit(1)
+        raise SystemExit(1) from startup_error

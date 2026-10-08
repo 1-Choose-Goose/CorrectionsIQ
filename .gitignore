@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .venv*/
 .idea/
+.serena/
 build/
 dist/
 *.spec

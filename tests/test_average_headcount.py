@@ -6,10 +6,10 @@ from pathlib import Path
 from docx import Document
 
 from average_headcount import (
+    Match,
     build_segments,
     choose_match,
     find_matches,
-    Match,
     institution_regex,
     parse_ru_date,
     read_records,
@@ -24,7 +24,7 @@ def make_docx(path: Path, rows):
     for row_index, row in enumerate(rows):
         for cell_index, value in enumerate(row):
             table.cell(row_index, cell_index).text = value
-    document.save(path)
+    document.save(str(path))
 
 
 def make_month_docx(path: Path, day_rows):
@@ -37,7 +37,7 @@ def make_month_docx(path: Path, day_rows):
             for cell_index, value in enumerate(row):
                 table.cell(row_index, cell_index).text = value
         document.add_table(rows=1, cols=4).cell(0, 0).text = "Учреждение"
-    document.save(path)
+    document.save(str(path))
 
 
 class AverageHeadcountTests(unittest.TestCase):
@@ -131,6 +131,7 @@ class AverageHeadcountTests(unittest.TestCase):
         selected = choose_match(matches, "ИК-10")
 
         self.assertIsNotNone(selected)
+        assert selected is not None
         self.assertEqual(selected.value, 857)
 
     def test_choose_match_prefers_cell_that_starts_with_query(self):
@@ -142,6 +143,7 @@ class AverageHeadcountTests(unittest.TestCase):
         selected = choose_match(matches, "ИК-1")
 
         self.assertIsNotNone(selected)
+        assert selected is not None
         self.assertEqual(selected.value, 947)
 
 

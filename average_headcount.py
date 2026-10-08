@@ -6,12 +6,12 @@ import os
 import re
 import sys
 import unicodedata
+from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable, Sequence
-
+from typing import Any
 
 DATE_RE = re.compile(r"(?<!\d)(\d{2})\.(\d{2})\.(\d{4})(?!\d)")
 REPORT_DATE_RE = re.compile(r"^\s*На\s+(\d{2}\.\d{2}\.\d{4})\s+года\s*$", re.IGNORECASE)
@@ -138,7 +138,7 @@ def parse_report_date(path: Path) -> date | None:
     try:
         from docx import Document
 
-        document = Document(path)
+        document = Document(str(path))
     except Exception:
         return None
 
@@ -234,7 +234,7 @@ def find_matches(
 ) -> list[Match]:
     from docx import Document
 
-    document = Document(path)
+    document = Document(str(path))
     tables = document.tables if scan_all_tables else document.tables[:1]
     results: list[Match] = []
     for table_index, table in enumerate(tables):
@@ -254,7 +254,7 @@ def read_records_from_file(
         from docx.table import Table
         from docx.text.paragraph import Paragraph
 
-        document = Document(path)
+        document = Document(str(path))
     except Exception as exc:
         print(f"Предупреждение: файл пропущен ({path}): {exc}", file=sys.stderr)
         return []
@@ -304,8 +304,13 @@ def read_records_from_file(
                 f"{variants}\nУточните название учреждения."
             )
 
-        value = sum(m.value for m in matches) if sum_matches else selected_match.value
-        record_matches = tuple(matches if sum_matches else (selected_match,))
+        if sum_matches:
+            value = sum(match.value for match in matches)
+            record_matches = tuple(matches)
+        else:
+            assert selected_match is not None
+            value = selected_match.value
+            record_matches = (selected_match,)
         records.append(Record(table_date, value, path, record_matches))
 
     return records
@@ -464,6 +469,8 @@ def write_xlsx(path: Path, segments: Sequence[Segment], average: float | None = 
 
     workbook = Workbook()
     sheet = workbook.active
+    if sheet is None:
+        raise RuntimeError("Не удалось создать лист Excel.")
     sheet.title = "Расчет"
 
     headers = ["Дата", "Количество"]
